@@ -4,7 +4,7 @@ A version of the classic pub game [Shut the Box](https://en.wikipedia.org/wiki/S
 
 No knowledge of binary or octal is required. Anyone can play!
 
-See [the manual](https://github.com/JeffJetton/pdp8-shut-the-box/manual.md) for full instructions.
+See [the manual](https://github.com/JeffJetton/pdp8-shut-the-box/manual.md)for full instructions.
 
 
 ## Files in the Repo:
