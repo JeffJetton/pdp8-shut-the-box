@@ -1,0 +1,584 @@
+///////////////////////////////////////////////////////////
+/                                                         /
+/   SHUT.PA - SHUT THE BOX                                /
+/                                                         /
+/   JEFF JETTON, MARCH 2026                               /
+/                                                         /
+///////////////////////////////////////////////////////////
+
+
+/ SHOULD WORK ON JUST ABOUT ANY PDP-8.  THE MQ REGISTER IS
+/ ONLY USED FOR AN EXTRA BIT OF RAZZLE-DAZZLE WHEN PLAYER
+/ WINS, AND EVEN THEN EAE INSTRUCTIONS ARE AVOIDED.
+
+
+
+        *20
+
+////////  CONSTANTS  //////////////////////////////////////
+
+SPEED,  7774        / CONTROLS TIMING OF DELAY SUBROUTINE,
+                    /   WHICH IS USED FOR DICE "ROLL"
+                    /   ANIMATION AND OTHER THINGS
+                    /
+                    /    * 7774 SEEMS TO WORK WELL AT 
+                    /      333K IPS (EMULATED)
+                    /    * IF USING SIMH WITH NO THROTTLE,
+                    /      TRY 7740 OR LOWER, DEPENDING ON
+                    /      HOW FAST THE HOST COMPUTER IS
+                    /
+IDIRLC, 7750        / INITIALIZES DIRLCT - DECREASE TO SHOW
+                    /   MORE FRAMES DURING "ROLL" ANIMATION
+                    /
+ISCORE, 7731        / INITIALIZES SCORE - DOOR VALUES ARE
+                    /   ADDED TO IT AS THE GAME IS PLAYED.
+                    /
+                    / IF SCORE IS POSITIVE, AT LEAST 39
+                    /   POINTS (47 OCTAL) HAVE BEEN ADDED,
+                    /   MAKING REMAINING VALUE SIX OR LESS,
+                    /   SO ONLY ONE DIE IS ROLLED.
+                    /
+NEGWIN, 7772        / IF SCORE EQUALS 0006, ALL 45 POINTS
+                    /   (55 OCTAL) HAVE BEEN ADDED AND
+                    /   THE GAME HAS BEEN WON.
+                    /
+NBITS,  7764        / USED TO COUNT 12 BIT SHIFTS
+IDIPTR, DITBL       / START OF DICE TABLE - RESETS DIPTR
+IDRPTR, DOORS       / START OF DOORS ARRAY - INITS DORPTR
+IDRVAL, 0012        / INITIAL DOOR VALUE USED IN POPDRS
+IROLMS, 7777        / INITIAL ROLL MASK (BOTH DICE USED)
+SROLMS, 0077        / SECONDARY ROLL MASK (ONE DIE USED)
+IASTE,  7463
+
+
+
+////////  ZERO PAGE VARIABLES  ////////////////////////////
+
+DORMAP, 0           / BITMAP OF THE NINE DOOR LOCATIONS
+                    /   (CHOSEN BY PLAYER AT STARTUP)
+SCORE,  0           / ISCORE + TOTAL VALUE OF SHUT DOORS
+PREVSW, 0           / SAVED PREVIOUS SWITCH REGISTER
+CURRSW, 0           / CURRENT SWITCH REGISTER
+DIROLL, 0           / CURRENT DICE ROLL RESULTS
+ROLTOT, 0           / ROLL TOTAL
+NEGROL, 0           / NEGATIVE ROLL TOTAL
+CM,     0
+SHUTS,  0           / BIT PATTERN OF NEW DOORS SHUT
+SHUVAL, 0           / TOTAL VALUE OF NEW DOORS SHUT
+DORVAL, 0           / VALUE OF CURRENT DOOR
+ROLMSK, 0           / MASK TO SHOW EITHER ONE OR TWO DICE
+DLOOP,  0           / CYCLED FOR VARIOUS DELAYS IN GAME
+COUNTR, 0           / GENERAL-PURPOSE COUNTER VARIABLE
+TEMP,   0           / GENERAL-PURPOSE TEMP VARIABLE
+DORPTR, 0           / CURRENT POINTER INTO DOORS ARRAY
+BTMPTR, 0           / MOVING TOP OF DOORS ARRAY
+DIPTR,  DITBL       / CONSTANTLY-CYCLED POINTER TO A
+                    /   RESULT IN THE DICE TABLE
+DIRLCT, 0           / DICE ROLL COUNTER, FOR ROLL ANIMATION
+DOORS,  0           / DOORS ARRAY - TWELVE WORDS RESERVED
+        0           /   TO HOLD THE VALUE OF THE DOOR AT
+        0           /   EACH SWITCH POSITION.
+        0           /   USED TO FIND/CHECK LEGAL MOVES AND
+        0           /   CALCULATE EACH TURN'S DOOR TOTAL.
+        0           /   VALUES ARE ZEROED OUT WHEN THEIR
+        0           /   CORRESPONDING DOOR IS SHUT.
+        0
+        0
+        0
+        0
+        0
+        7777        / END OF ARRAY FLAG
+
+
+
+////////  GAME SETUP  /////////////////////////////////////
+
+        *200
+        CLA CLL
+        MQL
+        DCA CM
+        OSR
+        TAD IASTE
+        SNA
+        ISZ CM
+
+        / WE EVENTUALLY WANT EXACTLY NINE "DOOR" SWITCHES
+        /   IN A ROW FLIPPED DOWN, BUT WE DON'T WANT TO
+        /   START THE PROGRAM THAT WAY.  IF WE DO, MAKE
+        /   THE PLAYER TOGGLE AT LEAST ONE DOOR FIRST.
+        / THIS ENSURES THAT WE ALWAYS CYCLE THE DICE BY
+        /   SOME AMOUNT BEFORE FIRST ROLL.
+        / AS A RESULT, WE HAVE TWO NEARLY-IDENTICAL CHUNKS
+        /   OF CODE IN A ROW, WITH JUST THE LOOP EXIT
+        /   CONDITIONS OPPOSITE FROM EACH OTHER.
+
+        / CHECK SWITCHES AT PROGRAM START
+        JMS SETMAP      / TRY TO SET A VALID DOOR BITMAP
+        SZA             / DID IT FAIL? (IS AC ZERO?)
+        JMP .-2         / NO, WAIT UNTIL DOORS ARE INVALID
+        
+        / ENTRY POINT FOR NEW GAME AFTER PREVIOUS GAME OVER
+NEWGAM, CLA MQL
+        
+        / WAIT UNTIL VALID - LOOP UNTIL NINE IN A ROW
+        JMS SETMAP      / TRY TO SET A VALID DOOR BITMAP
+        SNA             / DID IT WORK? (DORMAP NOT ZERO?)
+        JMP .-2         / NO, WAIT UNTIL THEY'RE VALID
+
+        / INITIALIZE A NEW GAME
+        CLA             / SET ROLL MASK TO SHOW BOTH DICE
+        TAD IROLMS
+        DCA ROLMSK
+        TAD ISCORE      / INITIALIZE SCORE
+        DCA SCORE
+
+        / POPULATE THE "DOORS" ARRAY
+        /   THIS ASSOCIATES A VALUE WITH EACH DOOR/SWITCH.
+        /   VALUES ARE STORED BACKWARDS, WITH 9 LOWER IN
+        /   MEMORY THAN 1, TO MAKE CHECKING FOR GAME OVER
+        /   CONDITION (NO POSSIBLE MOVE) EASIER LATER.
+        TAD IDRVAL      / INITIALIZE RUNNING DOOR VALUE
+        DCA DORVAL      /   TO ONE MORE THAN MAXIMUM
+        TAD NBITS       / SET UP FOR COUNTING 12 BITS
+        DCA COUNTR
+        TAD IDRPTR      / INITIALIZE DOOR POINTER
+        DCA DORPTR
+        TAD DORMAP      / GET DOOR BITMAP
+        DCA TEMP        / MAKE A COPY WE CAN MESS WITH
+POPDRS, CLA             / ZERO OUT DOORS ARRAY LOCATION
+        DCA I DORPTR
+        TAD TEMP        / RESTORE THE SHIFTING BITMASK
+        RAR             / SHIFT LOW BIT INTO LINK
+        DCA TEMP
+        SNL             / IS THE LINK BIT SET?
+        JMP NXTPOP      / NO, MOVE TO NEXT LOCATION
+        CLA CMA         / YES, DECREMENT RUNNING DOOR VALUE
+        TAD DORVAL
+        DCA DORVAL
+        TAD DORVAL      / OVERWRITE THE ZERO WITH IT
+        DCA I DORPTR
+NXTPOP, ISZ DORPTR      / BUMP UP DOORS POINTER
+        ISZ COUNTR      / HAVE WE HANDLED ALL 12 BITS?
+        JMP POPDRS      / NO
+
+
+
+/////////  GAME LOOP STARTS HERE  /////////////////////////
+
+GLOOP,  CLA OSR         / PRESERVE SWITCH STATE
+        AND DORMAP      / (IGNORING NON-DOOR SWITCHES)
+        DCA PREVSW
+        
+        / ROLL THE DICE
+        TAD IDIRLC      / SET UP NUMBER OF DICE ANIMATIONS
+        DCA DIRLCT      /   (DICE ROLL COUNTER)
+        TAD IROLMS      / INITIALIZE ROLL MASK TO DEFAULT
+        DCA ROLMSK      /   (ROLL BOTH DICE)
+        TAD SCORE       / CHECK SCORE
+        SPA CLA         / SIX POINTS OR FEWER LEFT?
+        JMP DANIM       / NO, KEEP BOTH DICE
+        TAD SROLMS      / YES, OVERRIDE DEFAULT MASK
+        DCA ROLMSK      /   (USE JUST ONE DIE)
+DANIM,  JMS DELAY       / LET AC LIGHTS LINGER A BIT
+        JMS DCYCLE      / CYCLE DICE
+        CLA CLL         / PUT "RANDOM" DICE RESULT IN AC
+        TAD I DIPTR
+        AND ROLMSK      /  (WHICH MIGHT HIDE THE LEFT DIE)
+        ISZ DIRLCT      / DONE ANIMATING?
+        JMP DANIM       / NO
+SAVROL, DCA DIROLL      / YES, SAVE THE FINAL DICE RESULT
+
+        / CALCULATE DICE ROLL TOTAL
+        CLA CLL         / RESET ROLL TOTAL
+        DCA ROLTOT
+        TAD NBITS       / SET UP HOW MANY BIT SHIFTS TO DO
+        DCA COUNTR
+        TAD DIROLL      / GET DICE ROLL RESULT
+BITCNT, RAL             / MOVE HIGH BIT INTO LINK
+        SZL             / IS IT SET?
+        ISZ ROLTOT      / YES, INCREMENT ROLL TOTAL
+        ISZ COUNTR      / HAVE WE SHIFTED ALL 12 BITS?
+        JMP BITCNT      / NO
+        CLA CLL         / YES
+        TAD ROLTOT      / MAKE A NEGATIVE COPY OF ROLTOT
+        CIA             /   TO FACILITATE COMPARISONS
+        DCA NEGROL
+
+        / CHECK FOR GAME OVER (NO MOVES) SITUATION
+        TAD IDRPTR      / INITIALIZE ARRAY BOTTOM POINTER
+        DCA BTMPTR      /   TO START OF DOORS ARRAY
+SETBTM, CLA             / RESET DOOR POINTER TO BTMPTR
+        TAD BTMPTR
+        DCA DORPTR
+        DCA SHUVAL      / ZERO OUT WORKING SHUT VALUE TOTAL
+CHKLOC, CLA CLL         / GET CURRENT DOOR VALUE
+        TAD I DORPTR
+        CMA             / END OF DOOR ARRAY FLAG (7777)?
+        SNA
+        JMP NXTBTM      / YES, TRY AGAIN WITH NEW BOTTOM
+        CMA             / NO, TEST ADDING THE VALUE TO THE
+        TAD SHUVAL      /     WORKING SHUT VALUE TOTAL
+        TAD NEGROL      / COMPARE RESULT TO ROLL TOTAL
+        SNA             / DO THEY MATCH EXACTLY?
+        JMP WTFLIP      / YES, GAME NOT OVER YET!
+        SMA             / IS IT LESS THAN ROLL TOTAL?
+        JMP NXTLOC      / NO - TOTAL EXCEEDED, IGNORE VALUE
+        TAD ROLTOT      / YES, UNDO COMPARISON TO ROLTOT
+        DCA SHUVAL      / STORE NEW WORKING TOTAL
+NXTLOC, ISZ DORPTR
+        JMP CHKLOC
+NXTBTM, ISZ BTMPTR
+        CLA             / CHECK BTMPTR LOCATION CONTENTS
+        TAD I BTMPTR
+        CMA             / END OF DOOR ARRAY?
+        SZA
+        JMP SETBTM      / NO, CHECK AGAIN FROM NEW BOTTOM
+        TAD CM          / YES, NO VALID MOVE FOUND :-(
+        SNA
+        JMP GAMOVR
+        CLA CMA
+        TAD DIRLCT
+        DCA DIRLCT
+        JMP DANIM+1
+
+
+
+        *400
+        / GAME OVER - SHOW POINTS (IF MQ EXISTS) AND FLASH
+        /             DICE UNTIL PLAYER TOGGLES A SWITCH
+GAMOVR, TAD SCORE       / NORMALIZE SCORE TO NEGATIVE OF
+        TAD NEGWIN      /   OPEN DOOR POINTS REMAINING
+        DCA SCORE
+        CLL CML         / SHIFT ONE BIT INTO AC FOR
+        RAR             /   EACH REMAINING POINT
+        ISZ SCORE       / DONE SHIFTING?
+        JMP .-3         / NO
+        MQL             / SHOW THE POINTS (UP TO 12) IN MQ
+ENDLUP, JMS DCYCLE
+        CLA OSR         / UPDATE CURRENT SWITCHES IN CASE
+        DCA CURRSW      /   THEY WERE CHANGED DURING ROLL
+        TAD DIROLL      / DICE ROLL INTO AC
+        JMS CHKNEW      / CHECK FOR NEW GAME AND DELAY
+        JMS DELAY2      /   MORE DELAYS...
+        JMS DELAY2
+        JMS DCYCLE
+        CLA CLL         / CLEAR AC
+        JMS CHKNEW      / CHECK & DELAY AGAIN W/ NO LIGHTS
+        JMS DELAY2
+        JMP ENDLUP      / REPEAT
+
+
+
+/////////  GET AND HANDLE PLAYER MOVE  ////////////////////
+
+        / CYCLE DICE WHILE WAITING FOR FIRST SWITCH FLIP
+WTFLIP, CLA CLL         / SHOW ROLL IN AC/LINK LIGHTS
+        TAD DIROLL
+        ISZ DLOOP       / WAIT A TEENY BIT...
+        JMP .-1
+        JMS DCYCLE      / CYCLE DICE TABLE
+        CLA OSR         / CHECK FOR SWITCH FLIPS
+        AND DORMAP
+        CIA
+        TAD PREVSW
+        SNA             / ANY FLIPS?
+        JMP WTFLIP      / NO, KEEP WAITING & CYCLING DICE
+        CLA CLL         / YES, REDISPLAY ROLL
+        TAD DIROLL
+        HLT             / HALT WHILE PLAYER FINISHES TURN
+
+        / HANDLE MOVE
+        CLA OSR         / REMEMBER NEW SWITCH STATE
+        AND DORMAP
+        DCA CURRSW      /   (CURRENT SWITCH REGISTER)
+        
+        / DID THE PLAYER ACTUALLY CHANGE ANYTHING?
+        TAD CURRSW      / COMPARE CURRENT STATE W/ PREVIOUS
+        CIA
+        TAD PREVSW
+        SNA             / DO THEY MATCH?
+        JMP WTFLIP      / YES, REDISPLAY ROLL AND TRY AGAIN
+
+        / CHECK IF ANY PREVIOUSLY SHUT DOORS WERE REOPENED
+        CLA CLL         / GET PREVIOUS SWITCHES
+        TAD PREVSW
+        CMA             / INVERT ALL DOORS
+        AND CURRSW      / COMPARE TO CURRENT STATE
+        SZA             / EVERYTHING LEGAL?
+        JMP ERROR       / NOPE
+
+        / FIGURE OUT WHICH OPEN DOORS WERE JUST SHUT
+        CLA CLL         / GET CURRENT SWITCHES AGAIN
+        TAD CURRSW
+        CMA             / INVERT ALL DOORS
+        AND PREVSW      / COMPARE TO PREVIOUS SWITCHES
+        DCA SHUTS       / STORE RESULT
+
+        / CALCULATE VALUE OF NEWLY SHUT DOOR(S)
+        DCA SHUVAL      / ZERO OUT SHUT VALUE RUNNING TOTAL
+        TAD IDRPTR      / RESET DOOR POINTER
+        DCA DORPTR
+        TAD NBITS       / SET UP TO COUNT BIT SHIFTS
+        DCA COUNTR
+        TAD SHUTS       / MAKE TEMP COPY OF SHUTS BITMAP
+        DCA TEMP        /   THAT WE CAN ALTER
+CHKDOR, TAD TEMP        / GET COPY OF SHUT DOOR BITMAP
+        RAR             / MOVE LOW BIT INTO LINK
+        DCA TEMP        / SAVE SHIFTED VERSION BACK TO TEMP
+        SNL             / IS THE BIT WE PUT IN LINK SET?
+        JMP NXTDOR      / NO, MOVE ON TO THE NEXT DOOR/BIT
+        TAD I DORPTR    / YES, GET THE VALUE OF THAT DOOR
+        TAD SHUVAL      / ADD TO RUNNING SHUT VALUE TOTAL
+        DCA SHUVAL
+NXTDOR, ISZ DORPTR      / INCREMENT DOOR POINTER
+        ISZ COUNTR      / WAS THAT THE LAST ONE?
+        JMP CHKDOR      / NO
+
+        / CHECK IF NEWLY SHUT DOORS ARE A LEGAL MOVE
+        TAD SHUVAL      / DOES TOTAL VALUE OF SHUT DOORS
+        TAD NEGROL      /   EQUAL DICE ROLL TOTAL?
+        SNA
+        JMP ADDVAL      / YES, SKIP PAST ERROR CODE BELOW
+        
+        / ERROR! - LET PLAYER "UNDO" SWITCHES TO PREVIOUS
+ERROR,  CLA OSR         / UPDATE CURRENT SWITCHES VARIABLE
+        AND DORMAP
+        DCA CURRSW
+        JMS XORSW       / XOR CURRENT WITH PREVIOUS
+        SNA             / ANYTHING STILL LEFT TO TOGGLE?
+        JMP WTFLIP      / NO, LET PLAYER TRY AGAIN
+        JMS DELAY2      / YES, SLOW-BLINK THE AC LIGHTS
+        CLA
+        JMS DELAY2
+        JMP ERROR       /   ...AND CHECK AGAIN
+
+        / ADD VALUE OF SHUT DOOR(S) TO RUNNING SCORE
+ADDVAL, TAD SHUVAL
+        TAD SCORE
+        DCA SCORE
+
+        / CHECK FOR WIN CONDITION
+        TAD SCORE
+        TAD NEGWIN
+        SNA             / DID PLAYER "SHUT THE BOX"?
+        JMP CELEB       / YES!
+        
+        / ZERO OUT SHUT LOCATIONS IN DOORS ARRAY
+        CLA CLL         / RESET DOOR POINTER
+        TAD IDRPTR
+        DCA DORPTR
+        TAD NBITS       / SET UP TO COUNT BIT SHIFTS
+        DCA COUNTR
+ZRODOR, TAD SHUTS
+        RAR             / MOVE LOW BIT INTO LINK
+        DCA SHUTS
+        SNL             / IS THE BIT IN LINK SET?
+        JMP NXTZRO      / NO, IGNORE THIS DOOR LOCATION
+        DCA I DORPTR    / YES, ZERO OUT CURRENT DOOR
+NXTZRO, ISZ DORPTR
+        ISZ COUNTR      / DONE WITH BIT SHIFTS?
+        JMP ZRODOR      / NO, GO DO NEXT ONE
+        JMP GLOOP       / YES, TAKE ANOTHER TURN
+
+
+
+        *600
+        / CELEBRATE!
+CELEB,  CLA OSR         / SAVE ALL CURRENT SWITCHES
+        DCA CURRSW      /   (EVEN NON-DOOR ONES)
+        CLA OSR         / SET PREVIOUS SWITCHES TO MATCH
+        DCA PREVSW
+SETFWD, CLA CLL CML RTR / SET BIT 1 IN AC
+        DCA SAVBIT      / REMEMBER IT
+        CLA IAC RAL     / SET BIT 10 IN MQ
+        MQL             / (DON'T ASSUME THIS CLEARS AC,
+                        /  SINCE MQ/EAE MIGHT NOT EXIST)
+MOVFWD, CLA             / RELOAD AC WITH SAVED BIT
+        TAD SAVBIT
+        JMS CHKNEW      / CHECK FOR NEW GAME & SHOW LIGHTS
+        RAR             / SHIFT AC BIT TO THE RIGHT
+        SZL             / DID IT FALL OFF THE END?
+        JMP SETBAK      / YES, PREPARE RETURN VOYAGE
+        DCA SAVBIT      / NO, REMEMBER NEW BIT
+        OSR             / UPDATE CURRENT SWITCHES VARIABLE
+        DCA CURRSW
+        CLA MQA         / SHIFT MQ BIT TO THE LEFT
+        RAL
+        MQL
+        JMP MOVFWD      / REPEAT FORWARD CYCLE
+SETBAK, RTL             / MOVE LINK BIT INTO AC BIT 10
+        DCA SAVBIT
+        CLA MQA         / SHIFT MQ BIT RIGHT
+        RAR
+        MQL
+MOVBAK, CLA             / GET SAVED BIT
+        TAD SAVBIT
+        JMS CHKNEW      / CHECK FOR NEW GAME & SHOW LIGHTS
+        RAL             / SHIFT AC BIT TO THE LEFT
+        SZL             / DID IT WIND UP IN LINK?
+        JMP SETFWD      / YES, RESTART ANIMATION
+        DCA SAVBIT      / NO, REMEMBER NEW BIT
+        OSR             / UPDATE CURRENT SWITCHES VARIABLE
+        DCA CURRSW
+        CLA MQA         / SHIFT MQ BIT TO THE RIGHT
+        RAR
+        MQL
+        JMP MOVBAK      / REPEAT BACKWARD CYCLE
+SAVBIT, 0
+
+
+
+////////  SUBROUTINES  ////////////////////////////////////
+
+        / DELAY - WASTE A BUNCH OF CYCLES, ACCORDING
+        /   TO THE VALUE OF THE SPEED VARIABLE.
+        /   PRESERVES AC, USES/DESTROYS COUNTR
+DELAY,  0
+        DCA SAVEAC      / TEMP SAVE OF AC
+        TAD SPEED       / SET UP HOW MANY FULL LOOPS WE DO
+        DCA COUNTR
+        TAD SAVEAC      / RESTORE AC
+        ISZ DLOOP       / WAIT FOR ONE FULL LOOP
+        JMP .-1
+        ISZ COUNTR      / STILL NEED MORE LOOPS?
+        JMP .-3         / YES, DO ANOTHER LOOP
+        JMP I DELAY     / NO, RETURN
+SAVEAC, 0
+
+
+        / DELAY2 - CALL DELAY TWICE
+DELAY2, 0
+        JMS DELAY
+        JMS DELAY
+        JMP I DELAY2
+
+
+        / SET MAP  - CHECK IF SWITCH REGISTER SWITCHES
+        /   ARE CORRECTLY SET WITH NINE "OPEN" DOORS IN
+        /   A ROW AND THE OTHER THREE "SHUT".
+        /   RETURN W/ DORMAP & AC SET IF SO, ZERO IF NOT.
+        /   LINK WILL ALWAYS BE CLEAR ON RETURN.
+        /   (USES/DESTROYS TEMP VARIABLE)
+        /
+        /   ALSO CYCLES THE DICE AND DISPLAYS SR IN AC
+        /   FOR A BIT WHILE WE'RE AT IT.
+SETMAP, 0
+        JMS DCYCLE      / CYCLE THE DICE
+        CLA OSR         / SHOW SWITCHES IN AC
+        ISZ DLOOP       / GIVE THEM TIME TO BE SEEN
+        JMP .-1
+        CLA             / ZERO OUT DORMAP
+        DCA DORMAP
+        TAD BITROW      / COPY A SHIFTABLE BITMAP OF NINE
+        DCA TEMP        /   BITS IN A ROW (0777) TO TEMP
+GETSW,  CLA OSR         / GET SWITCHES
+        CIA             / COMPARE TO BITMAP IN TEMP
+        TAD TEMP 
+        SZA             / DO THEY MATCH?
+        JMP NXTRAL      / NO, SHIFT AND CHECK AGAIN
+        CLA OSR         / YES, STORE IN DORMAP
+        DCA DORMAP
+        JMP FINRET      / FINISH UP AND RETURN
+NXTRAL, CLA CLL         / SHIFT TEMP TO THE LEFT
+        TAD TEMP
+        RAL
+        DCA TEMP
+        SNL             / POSSIBILITIES LEFT TO CHECK?
+        JMP GETSW       / YES, TRY NEXT ONE
+FINRET, CLL             / NO, CLEAR LINK
+        TAD DORMAP      / AC SHOULD HOLD DORMAP UPON RETURN
+        JMP I SETMAP    / RETURN
+BITROW, 0777
+
+
+        / CHECK FOR NEW GAME - RESTART GAME IF
+        /   THE PLAYER HAS CHANGED ANY SWITCHES.
+        /   OTHERWISE, DELAY TO SHOW THE LIGHTS.
+        /   CALLED DURING CELEB AND GAMOVR ANIMATIONS.
+        /   USES/DESTROYS TEMP
+CHKNEW, 0
+        DCA TEMP        / SAVE A COPY OF AC
+        JMS XORSW       / COMPARE CURRENT & PREV SWITCHES
+        SZA CLA         / ANY CHANGES?
+        JMP NEWGAM      / YES, START ANOTHER GAME
+        TAD TEMP        / NO, RESTORE SAVED AC
+        JMS DELAY       / SHOW LIGHTS
+        JMP I CHKNEW    / RETURN
+
+
+        / XOR SWITCHES - COMPARE CURRENT SWITCH STATE WITH
+        /   PREVIOUS TO IDENTIFY ANY DIFFERENCES.
+        /   RELIES ON PREVSW AND CURRSW BEING SET.
+        /   CALLED BY "ERROR" SECTION OF MAIN PROGRAM WITH
+        /   DOOR-MASKED SWITCHES AND BY REPLAY SUBROUTINE
+        /   WITH ALL SWITCHES.
+        /   THE ALGORITHM USED IS DARK MAGIC FROM PAGE 105
+        /   OF "SMALL COMPUTER HANDBOOK" (1967-1968 ED.)
+XORSW,  0
+        CLA
+        TAD CURRSW
+        AND PREVSW
+        CIA
+        CLL RAL
+        TAD CURRSW 
+        TAD PREVSW      / AC NOW HOLDS CURRSW XOR PREVSW
+        CLL
+        JMP I XORSW     / RETURN
+
+
+        / DICE CYCLE -- MOVE POINTER TO NEXT RESULT IN THE
+        /   DICE TABLE AND START BACK OVER IF END REACHED
+DCYCLE, 0
+        ISZ DIPTR       / BUMP UP DICE POINTER
+        CLA             / GET THE DICE RESULT IT POINTS TO
+        TAD I DIPTR
+        SZA             / IS IT ZERO (END OF TABLE)?
+        JMP DWAIT       / NO, WAIT AND RETURN
+        TAD IDIPTR      / YES, RESET POINTER
+        DCA DIPTR
+        JMP I DCYCLE    / RETURN
+DWAIT,  AND .           / THIS JUST WASTES MICROSECONDS
+        JMP .-2         /   SO THE TIMING EVENS OUT
+
+
+
+        *1000
+        / DICE TABLE
+DITBL,  3404    / 3 1
+        7604    / 5 1
+        7737    / 6 5
+        3604    / 4 1
+        1416    / 2 3
+        7714    / 6 2
+        3437    / 3 5
+        1404    / 2 1
+        1037    / 1 5
+        1036    / 1 4
+        7637    / 5 5
+        3416    / 3 3
+        3677    / 4 6
+        1436    / 2 4
+        1077    / 1 6
+        7777    / 6 6
+        1014    / 1 2
+        3614    / 4 2
+        1437    / 2 5
+        3436    / 3 4
+        1004    / 1 1
+        1016    / 1 3
+        1477    / 2 6
+        3637    / 4 5
+        7704    / 6 1
+        1414    / 2 2
+        3636    / 4 4
+        7677    / 5 6
+        7616    / 5 3
+        3616    / 4 3
+        7636    / 5 4
+        3477    / 3 6
+        7736    / 6 4
+        7716    / 6 3
+        3414    / 3 2
+        7614    / 5 2
+        0000    / END OF TABLE MARKER
+
