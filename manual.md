@@ -14,7 +14,7 @@ For this PDP-8 version, the Switch Register switches are our doors that start ou
 * The game will kick off as soon as nine--and only nine--switches are set in a row.
     * NOTE: If the switches are already correcly set before the program starts, you'll still need to toggle one of them off and on to signal to the computer that you're ready to play.
 
-These doors/switches are given the values **one** through **nine**, in order from left to right.
+These doors/switches are assigned the values **one** through **nine**, in order from left to right.
 
 
 On a PDP-8 without numbers printed over the switches, it's easiest to keep track if you set them either flush left or flush right, so the doors are color-coded in three groups of three:
@@ -50,7 +50,7 @@ On models such as the PDP-8/E, where bit numbers are printed over the switches, 
 
 If the rolled dice total is impossible to match with any combination of still-open doors, the **the dice will flash slowly** at the end of the roll to let you know that **the game is over**.
   
-* Your **score** is the total value of remaining open doors--the lower, the better!
+* Your **score** is the total value of remaining open doors--the lower, the better.
 * If your PDP-8 has an MQ register, this score will also display there (one light per point, up to a maximum of 12).
    
 If you manage to shut all the doors (flip up every switch), congratulations! You've **Shut the Box** and earned the best possible score of zero. This is not an easy feat!
@@ -95,20 +95,20 @@ After a few more turns, you wind up with every switch flipped up except for the 
 
 How lucky! You got a four!
 
-You flip up the last switch and... *nothing*. Remember, you still have to **submit** your turn by pressing Start or Continue, even if it's the game-winning flip!
+You flip up the last switch and... *nothing*. Remember, you still have to **submit** your turn by pressing Start or Continue, even if it's the game-winning flip.
 
 ## Making Mistakes
 
 If you submit your turn by pressing Start/Continue and get one or more **quickly-flashing lights** in the Accumulator, that means your selection was invalid due to:
 
-* Shut doors do not add up to dice roll total, and/or...
-* Doors that were shut in a previous turn have been re-opened
+* The doors you just shut do not add up to dice roll total, and/or...
+* One or more doors that were shut in a previous turn have been reopened
 
-Toggle the switches that correspond to the blinking lights to "undo" your entire move. Once everything is back they way it was before, the dice roll will redisplay and you can try again.
+Toggle the switches that correspond to the blinking lights to "undo" your entire move. Once everything is back the way it was before, the previous dice results will redisplay, and you can try again.
 
 ## Multiple Players
 
-Compete with your friends by letting everyone play a full game and seeing who gets the best (lowest) score.
+Compete with your friends by letting everyone play a full game and seeing who can get the best (lowest) score.
 
 You can also play the **golf** variation:
 
